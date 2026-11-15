@@ -1,0 +1,55 @@
+name: Build APK from ZIP
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-from-zip-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip the newest project ZIP
+        run: |
+          Z=$(ls -1 *.zip 2>/dev/null | sort | tail -1)
+          if [ -z "$Z" ]; then echo "::error::No .zip file in the repository root"; exit 1; fi
+          echo "Using $Z" | tee -a "$GITHUB_STEP_SUMMARY"
+          mkdir -p src && unzip -q "$Z" -d src
+          P=$(dirname "$(find src -maxdepth 3 -name settings.gradle.kts | head -1)")
+          echo "PROJECT=$GITHUB_WORKSPACE/$P" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace assembleDebug 2>&1 | tee build.log
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: prime-distribution-debug-apk
+          path: ${{ env.PROJECT }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Show compiler errors (on failure)
+        if: ${{ failure() }}
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          { echo "## Compiler errors"; echo '```'; grep -nE "^e: |error:|What went wrong|Could not" build.log | head -80; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload build log (on failure)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: ${{ env.PROJECT }}/build.log
